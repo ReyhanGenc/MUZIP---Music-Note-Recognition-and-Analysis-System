@@ -1,0 +1,7 @@
+PyQt5
+opencv-python
+numpy
+pillow
+scipy
+PyQt5-stubs
+pyaudio
