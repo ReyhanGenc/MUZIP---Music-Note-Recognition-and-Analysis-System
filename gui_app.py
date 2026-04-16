@@ -2,7 +2,7 @@ import sys
 import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
-                             QTextEdit, QSplitter, QFrame, QMessageBox)
+                             QTextEdit, QSplitter, QFrame, QMessageBox, QScrollArea)
 from PyQt5.QtGui import QPixmap, QFont
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
@@ -109,7 +109,7 @@ class LiveAudioWorker(QThread):
             detector = NoteDetector(NOTES)
             analyzer = AudioAnalyzer(rate=self.rate, fft_processor=fft_proc, note_detector=detector)
             
-            duration_map = {"Sekizlik": 1, "Dörtlük": 2, "İkilik": 4}
+            duration_map = {"Onaltılık": 0.5, "Sekizlik": 1, "Dörtlük": 2, "İkilik": 4, "Birlik": 8}
             expected_timeline = []
             for snote in self.score_data:
                 blocks = duration_map.get(snote['duration_type'], 2)
@@ -197,6 +197,8 @@ class MuzipApp(QMainWindow):
         self.audio_path = None
         self.score_data = []
         self.audio_data = []
+        self.zoom_factor = 1.0
+        self.original_pixmap = None
 
         self.init_ui()
 
@@ -212,10 +214,32 @@ class MuzipApp(QMainWindow):
         lbl_title_img.setFont(QFont("Arial", 14, QFont.Bold))
         left_layout.addWidget(lbl_title_img)
 
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setStyleSheet("background-color: #111; border: 2px dashed #555;")
+        
         self.lbl_image_display = QLabel("Henüz bir nota yüklenmedi.")
         self.lbl_image_display.setAlignment(Qt.AlignCenter)
-        self.lbl_image_display.setStyleSheet("background-color: #111; border: 2px dashed #555;")
-        left_layout.addWidget(self.lbl_image_display, stretch=1)
+        self.scroll_area.setWidget(self.lbl_image_display)
+        left_layout.addWidget(self.scroll_area, stretch=1)
+        
+        # Zoom butonları
+        zoom_layout = QHBoxLayout()
+        btn_zoom_in = QPushButton("🔍+")
+        btn_zoom_in.setFixedWidth(50)
+        btn_zoom_in.clicked.connect(lambda: self.adjust_zoom(1.2))
+        btn_zoom_out = QPushButton("🔍-")
+        btn_zoom_out.setFixedWidth(50)
+        btn_zoom_out.clicked.connect(lambda: self.adjust_zoom(0.8))
+        btn_zoom_reset = QPushButton("Reset")
+        btn_zoom_reset.setFixedWidth(80)
+        btn_zoom_reset.clicked.connect(self.reset_zoom)
+        
+        zoom_layout.addWidget(btn_zoom_in)
+        zoom_layout.addWidget(btn_zoom_out)
+        zoom_layout.addWidget(btn_zoom_reset)
+        zoom_layout.addStretch()
+        left_layout.addLayout(zoom_layout)
 
         btn_load_img = QPushButton("Dosya Aç")
         btn_load_img.clicked.connect(self.load_image)
@@ -289,13 +313,34 @@ class MuzipApp(QMainWindow):
             self.log(f"📄 Resim yüklendi: {os.path.basename(fname)}")
 
     def show_image(self, path):
-        pixmap = QPixmap(path)
-        scaled_pixmap = pixmap.scaled(self.lbl_image_display.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.lbl_image_display.setPixmap(scaled_pixmap)
+        self.original_pixmap = QPixmap(path)
+        self.zoom_factor = 1.0
+        self.apply_zoom()
+
+    def adjust_zoom(self, factor):
+        self.zoom_factor *= factor
+        if self.zoom_factor < 0.1: self.zoom_factor = 0.1
+        if self.zoom_factor > 10.0: self.zoom_factor = 10.0
+        self.apply_zoom()
+
+    def reset_zoom(self):
+        self.zoom_factor = 1.0
+        self.apply_zoom()
+
+    def apply_zoom(self):
+        if self.original_pixmap:
+            scaled_pixmap = self.original_pixmap.scaled(
+                self.original_pixmap.size() * self.zoom_factor,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            self.lbl_image_display.setPixmap(scaled_pixmap)
+            self.lbl_image_display.adjustSize()
 
     def start_image_analysis(self):
         self.btn_analyze_img.setEnabled(False)
-        self.log(">> Görüntü analizi başlıyor...")
+        self.log(">> Görüntü analizi başlıyor (OpenCV + Gemini AI)...")
+        self.log("   Not: Yapay zeka analizi birkaç saniye sürebilir.")
         
         self.img_worker = ImageWorker(self.image_path)
         self.img_worker.finished.connect(self.on_image_analysis_complete)

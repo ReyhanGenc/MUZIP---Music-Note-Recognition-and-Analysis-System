@@ -31,7 +31,7 @@ class PerformanceEvaluator:
         
         # 1. Beklenen (Score) notasını bloklara genişlet
         # Dörtlük (Quarter) = 2 blok, Sekizlik (Eighth) = 1 blok, İkilik (Half) = 4 blok
-        duration_map = {"Sekizlik": 1, "Dörtlük": 2, "İkilik": 4}
+        duration_map = {"Onaltılık": 0.5, "Sekizlik": 1, "Dörtlük": 2, "İkilik": 4, "Birlik": 8}
         expected_timeline = []
         for snote in score_notes:
             blocks = duration_map.get(snote['duration_type'], 2) # Varsayılan dörtlük

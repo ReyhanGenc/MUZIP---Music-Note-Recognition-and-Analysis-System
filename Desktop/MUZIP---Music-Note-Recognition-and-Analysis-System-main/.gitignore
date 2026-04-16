@@ -1,8 +1,0 @@
-.venv/
-__pycache__/
-*.pyc
-test_import.py
-.idea/
-.vscode/
-*.log
-.DS_Store
