@@ -5,5 +5,5 @@ pillow
 scipy
 PyQt5-stubs
 pyaudio
-google-generativeai
+google-genai
 python-dotenv

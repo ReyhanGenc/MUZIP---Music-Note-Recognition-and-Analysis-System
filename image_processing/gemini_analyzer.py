@@ -1,5 +1,5 @@
 import os
-import google.generativeai as genai
+from google import genai
 import json
 import re
 from PIL import Image
@@ -9,51 +9,61 @@ load_dotenv()
 
 # API Key'i yapılandır
 API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=API_KEY)
+# Yeni SDK'da client üzerinden işlem yapılır
 
 class GeminiMusicAnalyzer:
     def __init__(self):
-        self.model = None
+        self.client = genai.Client(api_key=API_KEY)
+        self.model_id = None
         self.find_best_model()
 
     def find_best_model(self):
         """Kullanıcının API anahtarı ile erişebileceği en iyi modeli bulur."""
         print("\n[Sistem] Erişilebilir modeller kontrol ediliyor...")
         try:
-            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            available_models = [m.name for m in self.client.models.list() if m.supported_actions and 'generateContent' in m.supported_actions]
             print(f"[Sistem] API Anahtarınızın erişebildiği modeller: {available_models}")
             
-            # Tercih sırasına göre modeller
+            # Tercih sirasina gore modeller
             preferences = [
-                'models/gemini-1.5-flash-latest',
-                'models/gemini-1.5-flash',
-                'models/gemini-1.5-pro',
-                'models/gemini-pro'
+                'gemini-2.5-flash',
+                'gemini-2.5-pro',
+                'gemini-2.0-flash',
+                'gemini-2.0-flash-exp',
+                'gemini-1.5-flash-latest',
+                'gemini-1.5-flash',
+                'gemini-1.5-pro',
+                'gemini-pro'
             ]
             
-            selected_model_path = None
+            selected_model = None
             for pref in preferences:
-                if pref in available_models:
-                    selected_model_path = pref
+                # Flexible matching for models/ prefix
+                pref_full = f"models/{pref}" if not pref.startswith("models/") else pref
+                pref_short = pref.replace("models/", "")
+                
+                if pref_full in available_models:
+                    selected_model = pref_full
+                    break
+                elif pref_short in available_models:
+                    selected_model = pref_short
                     break
             
-            if not selected_model_path and available_models:
-                selected_model_path = available_models[0]
+            if not selected_model and available_models:
+                selected_model = available_models[0]
             
-            if selected_model_path:
-                print(f"[AI] Seçilen Model yolu: {selected_model_path}")
-                # Bazı SDK sürümlerinde 'models/' ön ekini kaldırmak gerekebilir
-                model_name = selected_model_path.replace('models/', '')
-                self.model = genai.GenerativeModel(model_name)
+            if selected_model:
+                print(f"[AI] Seçilen Model: {selected_model}")
+                self.model_id = selected_model
             else:
                 print("[HATA] Hiçbir üretken model bulunamadı. Lütfen API anahtarınızı kontrol edin.")
         except Exception as e:
             print(f"[HATA] Model listeleme başarısız: {e}")
             # Manuel fallback
-            self.model = genai.GenerativeModel('gemini-1.5-flash')
+            self.model_id = 'gemini-1.5-flash'
 
     def analyze_notes(self, image_path, original_size=None, crop_box=None):
-        if not self.model:
+        if not self.model_id:
             print("[HATA] Model yüklenemediği için analiz yapılamıyor.")
             return []
 
@@ -80,8 +90,16 @@ class GeminiMusicAnalyzer:
             Örnek format: [{"order": 1, "duration": "Quarter", "accidental": "Sharp", "accidental_box_2d": [100, 200, 150, 250]}]
             """
 
-            response = self.model.generate_content([prompt, img])
-            print(f"\n--- [Gemini Analiz Çıktısı] ---\n{response.text}\n")
+            response = self.client.models.generate_content(
+                model=self.model_id,
+                contents=[prompt, img]
+            )
+            
+            # Windows terminalleri için güvenli yazdırma (Türkçe karakterlerde çökmesini önler)
+            try:
+                print(f"\n--- [Gemini Analiz Çıktısı] ---\n{response.text}\n")
+            except Exception:
+                print("\n--- [Gemini Analiz Çıktısı] --- (Metin alındı ancak terminale yazdırılamadı)")
             
             json_str = response.text
             if "```json" in json_str:
@@ -89,7 +107,12 @@ class GeminiMusicAnalyzer:
             elif "```" in json_str:
                 json_str = json_str.split("```")[1].split("```")[0]
             
-            results = json.loads(json_str.strip())
+            try:
+                results = json.loads(json_str.strip())
+            except json.JSONDecodeError as je:
+                print(f"[HATA] JSON ayristirma hatasi: {je}")
+                print(f"[HATA] Ham metin: {json_str[:200]}...")
+                return []
 
             # Koordinatları orijinal resme göre yeniden hesapla (eğer crop varsa)
             if crop_box and original_size:
@@ -121,3 +144,7 @@ class GeminiMusicAnalyzer:
         except Exception as e:
             print(f"!!! Gemini Analizi Sırasında Hata: {e}")
             return []
+
+if __name__ == "__main__":
+    analyzer = GeminiMusicAnalyzer()
+    print("Gemini Analizörü başarıyla başlatıldı.")

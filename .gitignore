@@ -7,3 +7,5 @@ test_import.py
 *.log
 .DS_Store
 .env
+scratch/
+assets/output/

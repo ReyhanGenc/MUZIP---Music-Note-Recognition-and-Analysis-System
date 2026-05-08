@@ -39,7 +39,7 @@ def run_image_processing_module(file_path):
         original_img, processed_img = staff_detection.load_and_preprocess_image(file_path)
     except FileNotFoundError as e:
         print(f"Hata: {e}")
-        return
+        return []
 
     # 2. Dizek Tespiti ve Kaldırma
     staff_y_coords, marked_img, staff_removed_img = \

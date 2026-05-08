@@ -30,6 +30,8 @@ class ImageWorker(QThread):
     def run(self):
         try:
             score_data = run_image_processing_module(self.file_path)
+            if score_data is None:
+                score_data = []
             processed_img_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
                                             'assets', 'output', 'detected_heads.png')
             

@@ -143,10 +143,12 @@ def merge_note_heads_simple(heads, spacing):
             cx2 = x2 + w2 / 2
             cy2 = y2 + h2 / 2
 
-            same_row = abs(cy - cy2) < spacing * 0.4
-            close_x = abs(cx - cx2) < spacing * 0.9
+            # Kuyruklar genellikle nota başının altında veya üstünde olduğu için dikey (Y) toleransı artırıldı
+            # Yatay (X) toleransı ise aynı hizada olduklarını doğrulamak için daha sıkı hale getirildi
+            vertical_near = abs(cy - cy2) < spacing * 1.2
+            horizontal_near = abs(cx - cx2) < spacing * 0.6
 
-            if same_row and close_x:
+            if horizontal_near and vertical_near:
                 min_x = min(min_x, x2)
                 min_y = min(min_y, y2)
                 max_x = max(max_x, x2 + w2)
@@ -157,19 +159,21 @@ def merge_note_heads_simple(heads, spacing):
 
     return merged
 def is_valid_note_head(bbox, spacing):
-    _, _, w, h = bbox
+    x, y, w, h = bbox
 
-    if not (0.6 * spacing < w < 1.8 * spacing):
+    # Kuyrukları elemek için minimum boyut sınırları artırıldı.
+    # Nota başı genişliği genellikle spacing değerine yakındır.
+    # Genişlik (0.8 - 2.0 * spacing)
+    # Yükseklik (0.8 - 1.6 * spacing)
+    
+    if not (0.8 * spacing < w < 2.0 * spacing):
         return False
-    if not (0.6 * spacing < h < 1.8 * spacing):
+    if not (0.8 * spacing < h < 1.6 * spacing):
         return False
 
     aspect_ratio = w / h
-    if not (0.6 < aspect_ratio < 1.6):
-        return False
-
-    area = w * h
-    if not (0.3 * spacing * spacing < area < 4.0 * spacing * spacing):
+    # Nota başları yatay elipstir, çok dikey nesneleri eliyoruz.
+    if not (0.9 < aspect_ratio < 2.0): 
         return False
 
     return True
@@ -321,15 +325,37 @@ def detect_note_heads(staff_removed_img, staff_coords):
         current_staff = min(staff_rows, key=lambda r: abs(center_y - (r['top'] + r['bottom']) / 2))
         spacing = (current_staff['bottom'] - current_staff['top']) / 4
 
-        if y < (current_staff['top'] - spacing * 5) or y > (current_staff['bottom'] + spacing * 5):
+        # Sol anahtarını ve donanımı elemek için dinamik ofset
+        staff_index = next((idx for idx, r in enumerate(staff_rows) if r == current_staff), 0)
+        
+        if staff_index == 0:
+            left_margin = 6.0 * spacing 
+        else:
+            left_margin = 3.5 * spacing 
+        
+        if x < left_margin:
             continue
-        if x < 80: 
+
+        # Bileşen doluluk (Solidity) kontrolü: Alan / Bbox Alanı
+        area = stats[i, cv2.CC_STAT_AREA]
+        solidity = area / (w * h)
+        
+        if solidity < 0.2: 
+            continue
+            
+        # Nota başları alanı dizek aralığı karesine göre (0.5 - 3.5 katı)
+        # Min alan 0.3'ten 0.5'e çekilerek kuyruk kalıntıları elendi.
+        if not (0.5 * (spacing**2) < area < 3.5 * (spacing**2)):
             continue
 
         mask = np.zeros(staff_removed_img.shape, dtype=np.uint8)
         mask[labels == i] = 255
         
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        # Kernel boyutunu dizek aralığına göre ayarla (0.35 katı - biraz küçültüldü)
+        k_size = max(3, int(spacing * 0.35))
+        if k_size % 2 == 0: k_size += 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+        
         heads_only = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         
         note_head_contours, _ = cv2.findContours(
