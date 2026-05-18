@@ -79,12 +79,11 @@ class GeminiMusicAnalyzer:
             Her bir numaralı nota için şu bilgileri içeren bir JSON listesi döndür:
             - "order": Notanın üzerindeki numara (1, 2, 3 vb.)
             - "duration": Notanın süresi (Whole, Half, Quarter, Eighth, Sixteenth)
-            - "accidental": Notanın hemen SOLUNDA (bitişiğinde) bir işaret olup olmadığını kontrol et. 
+            - "accidental": Notanın hemen SOLUNDA (bitişiğinde) bir işaret olup olmadığını ÇOK DİKKATLİ kontrol et. 
                - Seçenekler: "Sharp" (#), "Flat" (b), "Natural" (naturel işareti), "None".
+               - ÖNEMLİ: Bazı diyez/bemol işaretleri silik veya küçük olabilir. Eğer notanın solunda herhangi bir ek sembol varsa, bu mutlaka bir arıza işaretidir.
             - "accidental_box_2d": Eğer "accidental" "None" DEĞİLSE, bu işaretin tam koordinatlarını [ymin, xmin, ymax, xmax] (0-1000 arası) olarak döndür. 
-               - ÖNEMLİ: Kutu sadece arıza işaretini (diyez/bemol/naturel) kapsamalıdır, notanın kendisini değil.
-               - İpucu: Arıza işaretleri çok küçük olabilir, her bir numaranın hemen soluna çok dikkatli bak. 
-               - Eğer işaret yoksa null döndür.
+               - Kutu sadece arıza işaretini (diyez/bemol/naturel) kapsamalıdır.
             
             Sadece JSON listesi döndür. Cevapta başka hiçbir metin olmasın.
             Örnek format: [{"order": 1, "duration": "Quarter", "accidental": "Sharp", "accidental_box_2d": [100, 200, 150, 250]}]

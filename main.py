@@ -76,13 +76,17 @@ def run_image_processing_module(file_path):
         order_text = f"#{i+1}" 
         cv2.putText(temp_img, order_text, (note['x'], note['y'] - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-        temp_img = symbol_analysis.put_text(temp_img, info_text, (note['x'], note['y'] + note['h'] + 15))
+        # Yeşil metin (Perde | Süre) artık Gemini analizinden sonra yazdırılacak.
 
         # Veri yapısını oluşturma
         score_data_for_matching.append({
             "pitch": note['pitch_info'], 
             "duration_type": duration_tr,
-            "order": i+1
+            "order": i+1,
+            "x": note['x'],
+            "y": note['y'],
+            "w": note['w'],
+            "h": note['h']
         })
 
 
@@ -168,6 +172,10 @@ def run_image_processing_module(file_path):
         
         print(f"#{note['order']:<3} | {note['duration_type']:<10} | {note['pitch']:<5} | {note['accidental']:<5}")
         
+        # Görsel üzerine yeşil bilgileri yazdır (Gemini'den gelen güncel bilgilerle)
+        info_text = f"{final_pitch} | {note['duration_type']}"
+        temp_img = symbol_analysis.put_text(temp_img, info_text, (note['x'], note['y'] + note['h'] + 15))
+
         final_score_data.append({
             "pitch": final_pitch,
             "duration_type": note['duration_type'], # 'Dörtlük' vb.
