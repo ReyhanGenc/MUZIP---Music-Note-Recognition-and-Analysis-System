@@ -86,7 +86,8 @@ def run_image_processing_module(file_path):
             "x": note['x'],
             "y": note['y'],
             "w": note['w'],
-            "h": note['h']
+            "h": note['h'],
+            "has_tail": note.get('has_tail', False)
         })
 
 
@@ -144,7 +145,13 @@ def run_image_processing_module(file_path):
             gemini_duration = gemini_map[order].get('duration', 'Quarter')
             gemini_accidental = gemini_map[order].get('accidental', 'None')
             
-            note['duration_type'] = map_duration_type(gemini_duration)
+            # NOTA KUYRUĞU KONTROLÜ: Eğer OpenCV bu notada kuyruk tespit ettiyse,
+            # bunu mutlaka "Sekizlik" (Eighth) olarak belirle.
+            if note.get('has_tail', False):
+                note['duration_type'] = "Sekizlik"
+            else:
+                note['duration_type'] = map_duration_type(gemini_duration)
+                
             note['accidental'] = map_accidental_type(gemini_accidental)
             
             # Mavi Kutu Çizme (Kullanıcı isteğiyle kaldırıldı)

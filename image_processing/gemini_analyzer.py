@@ -78,7 +78,11 @@ class GeminiMusicAnalyzer:
             
             Her bir numaralı nota için şu bilgileri içeren bir JSON listesi döndür:
             - "order": Notanın üzerindeki numara (1, 2, 3 vb.)
-            - "duration": Notanın süresi (Whole, Half, Quarter, Eighth, Sixteenth)
+            - "duration": Notanın süresi ("Whole", "Half", "Quarter", "Eighth", "Sixteenth"). Süre kararı verirken şu kurallara KESİNLİKLE uy:
+               - "Half" (İkilik): İçi BOŞ olan ve sapı olan notadır. Eğer notanın içi tamamen doluysa (siyahsa), KESİNLİKLE "Half" deme!
+               - "Quarter" (Dörtlük): İçi tamamen DOLU (siyah) olan ve sapında hiçbir kuyruğu/bayrağı (flag) bulunmayan, diğer notalarla üstten/alttan çizgilerle (beam) bağlanmamış bağımsız notadır.
+               - "Eighth" (Sekizlik): İçi DOLU (siyah) olan ve sapında tek bir kuyruğu/bayrağı olan ya da yanındaki notalarla üstten/alttan tek bir kalın çizgiyle (beam) birleştirilmiş notadır. Kuyruğu olan tüm notaları mutlaka "Eighth" olarak algıla.
+               - "Sixteenth" (Onaltılık): İçi DOLU (siyah) olan ve sapında çift kuyruğu/bayrağı olan ya da yanındaki notalarla çift çizgiyle birleştirilmiş notadır. Eğer çift kuyruk veya çift çizgi yoksa, KESİNLİKLE "Sixteenth" deme! Emin değilsen "Quarter" veya "Eighth" tercih et.
             - "accidental": Notanın hemen SOLUNDA (bitişiğinde) bir işaret olup olmadığını ÇOK DİKKATLİ kontrol et. 
                - Seçenekler: "Sharp" (#), "Flat" (b), "Natural" (naturel işareti), "None".
                - ÖNEMLİ: Bazı diyez/bemol işaretleri silik veya küçük olabilir. Eğer notanın solunda herhangi bir ek sembol varsa, bu mutlaka bir arıza işaretidir.

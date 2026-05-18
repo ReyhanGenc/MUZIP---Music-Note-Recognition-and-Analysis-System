@@ -161,15 +161,15 @@ def merge_note_heads_simple(heads, spacing):
 def is_valid_note_head(bbox, spacing):
     x, y, w, h = bbox
 
-    # Nota başından küçük kutuları elemeyi garanti altına almak için alt sınır sıkılaştırıldı
-    if not (0.85 * spacing < w < 2.0 * spacing):
+    # Genişlik olarak diğerlerinden fazlaca küçük olan kuyruk vb. parçaları elemek için alt sınır 0.95 yapıldı
+    if not (0.95 * spacing < w < 2.1 * spacing):
         return False
-    if not (0.82 * spacing < h < 1.6 * spacing):
+    if not (0.78 * spacing < h < 1.7 * spacing):
         return False
 
     aspect_ratio = w / h
-    # Nota başı yatay elipstir, aspect ratio kontrolü
-    if not (0.90 < aspect_ratio < 1.9): 
+    # Nota başı yatay elipstir. Dikey kuyrukları elemek için aspect ratio alt sınırı 0.98 yapıldı
+    if not (0.98 < aspect_ratio < 1.95): 
         return False
 
     return True
@@ -322,16 +322,16 @@ def detect_note_heads(staff_removed_img, staff_coords):
         if x < left_margin:
             continue
 
-        # Bileşen doluluk (Solidity) kontrolü: Alan / Bbox Alanı
+        # Bileşen doluluk (Solidity) kontrolü: Alan / Bbox Alanı (Çok çok az genişletildi)
         area = stats[i, cv2.CC_STAT_AREA]
         solidity = area / (w * h)
         
-        if solidity < 0.22: 
+        if solidity < 0.20: 
             continue
             
-        # Nota başları alanı dizek aralığı karesine göre (0.52 - 3.5 katı)
-        # Min alan 0.52'ye çekilerek bayrak/kuyruk parçalarının bağımsız nota olarak algılanması tamamen önlendi.
-        if not (0.52 * (spacing**2) < area < 3.5 * (spacing**2)):
+        # Nota başları alanı dizek aralığı karesine göre (0.52 - 3.6 katı)
+        # Çok küçük kuyruk parçalarını engellemek için alt sınır tekrar 0.52'ye çekildi.
+        if not (0.52 * (spacing**2) < area < 3.6 * (spacing**2)):
             continue
 
         mask = np.zeros(staff_removed_img.shape, dtype=np.uint8)
@@ -347,17 +347,17 @@ def detect_note_heads(staff_removed_img, staff_coords):
         note_head_contours, _ = cv2.findContours(
             heads_only, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
-
+ 
         raw_heads = [cv2.boundingRect(cnt) for cnt in note_head_contours]
-
+ 
         merged_heads = merge_note_heads_simple(raw_heads, spacing)
-
+ 
         for (ox, oy, ow, oh) in merged_heads:
             if not is_valid_note_head((ox, oy, ow, oh), spacing):
                 continue
-
+ 
             head_center_y = int(oy + oh / 2)
-
+ 
             pitch_info = calculate_pitch_from_coords(
                 head_center_y,
                 current_staff['coords']
@@ -367,7 +367,10 @@ def detect_note_heads(staff_removed_img, staff_coords):
                 (ox, oy, ow, oh),
                 spacing
             )
-
+            
+            # Nota kuyruğu kontrolü
+            has_tail = has_flag_from_stem(staff_removed_img, (ox, oy, ow, oh), spacing)
+ 
             detected_notes.append({
                 "x": ox,
                 "y": oy,
@@ -375,8 +378,9 @@ def detect_note_heads(staff_removed_img, staff_coords):
                 "h": oh,
                 "center_y": head_center_y,
                 "pitch_info": pitch_info,
-                "duration_type": duration_type
+                "duration_type": duration_type,
+                "has_tail": has_tail
             })
-
+ 
     return detected_notes, len(detected_notes)
 
