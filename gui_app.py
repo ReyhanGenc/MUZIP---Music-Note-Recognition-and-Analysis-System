@@ -2,9 +2,10 @@ import sys
 import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
-                             QTextEdit, QSplitter, QFrame, QMessageBox, QScrollArea)
-from PyQt5.QtGui import QPixmap, QFont
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+                             QTextEdit, QSplitter, QFrame, QMessageBox, QScrollArea,
+                             QSpinBox)
+from PyQt5.QtGui import QPixmap, QFont, QPainter, QPen, QColor
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect
 
 try:
     from main import run_image_processing_module
@@ -70,8 +71,53 @@ class AudioWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
+import threading
+import time
+
+class MetronomeWorker(threading.Thread):
+    def __init__(self, bpm, click_bytes, rate):
+        super().__init__()
+        self.bpm = bpm
+        self.click_bytes = click_bytes
+        self.rate = rate
+        self.is_running = True
+        self.daemon = True
+        self.beat_interval = 60.0 / bpm
+
+    def run(self):
+        p_out = pyaudio.PyAudio()
+        try:
+            stream_out = p_out.open(format=pyaudio.paInt16, 
+                                    channels=1, 
+                                    rate=self.rate, 
+                                    output=True)
+            
+            next_click_time = time.time()
+            while self.is_running:
+                current_time = time.time()
+                if current_time >= next_click_time:
+                    # Write metronome click asynchronously (blocks briefly for 50ms)
+                    stream_out.write(self.click_bytes)
+                    
+                    # Compute next click target time using drift-free timing
+                    next_click_time += self.beat_interval
+                    
+                    # Prevent falling behind if the system hangs temporarily
+                    if time.time() > next_click_time + self.beat_interval:
+                        next_click_time = time.time()
+                
+                # High-frequency sleep (1ms resolution) for perfect timing precision
+                time.sleep(0.001)
+                
+            stream_out.stop_stream()
+            stream_out.close()
+        except Exception as e:
+            print(f"Metronom Hatası: {e}")
+        finally:
+            p_out.terminate()
+
 class LiveAudioWorker(QThread):
-    note_detected = pyqtSignal(str, str, bool, int) # Beklenen, Duyulan, Doğru mu, Blok No
+    note_detected = pyqtSignal(str, str, bool, int, int) # Beklenen, Duyulan, Doğru mu, Blok No, Nota İndeksi
     status = pyqtSignal(str)
     finished = pyqtSignal(list)
 
@@ -82,17 +128,11 @@ class LiveAudioWorker(QThread):
         self.is_running = True
         self.rate = 44100
         self.chunk_size = 2048
+        self.metronome = None
 
     def run(self):
         p = pyaudio.PyAudio()
         try:
-            stream = p.open(format=pyaudio.paInt16, 
-                            channels=1, 
-                            rate=self.rate, 
-                            input=True, 
-                            output=True, # Hoparlör desteği
-                            frames_per_buffer=self.chunk_size)
-            
             # Click sesi üret (1000Hz sinüs)
             click_freq = 1000
             click_dur = 0.05
@@ -101,6 +141,45 @@ class LiveAudioWorker(QThread):
             # Fade out
             click_wave *= np.linspace(1, 0, len(click_wave))
             click_bytes = (click_wave * 32767).astype(np.int16).tobytes()
+
+            # --- GERİ SAYIM AŞAMASI (1 2 3 4 Son 2 3 4) ---
+            countdown_labels = ["1", "2", "3", "4", "Son", "2", "3", "4"]
+            p_out = pyaudio.PyAudio()
+            stream_out = p_out.open(format=pyaudio.paInt16, 
+                                    channels=1, 
+                                    rate=self.rate, 
+                                    output=True)
+            
+            beat_dur = 60.0 / self.bpm
+            
+            for label in countdown_labels:
+                if not self.is_running:
+                    break
+                self.status.emit(f"⏱ GERİ SAYIM: [ {label} ]")
+                stream_out.write(click_bytes)
+                time.sleep(beat_dur)
+                
+            stream_out.stop_stream()
+            stream_out.close()
+            p_out.terminate()
+            
+            if not self.is_running:
+                p.terminate()
+                self.finished.emit([])
+                return
+
+            self.status.emit("🚀 BAŞLA!")
+
+            # Microphone-only input stream (decoupled output path to prevent blocking)
+            stream = p.open(format=pyaudio.paInt16, 
+                            channels=1, 
+                            rate=self.rate, 
+                            input=True, 
+                            frames_per_buffer=self.chunk_size)
+
+            # Start decoupled metronome thread at the exact synchronized time
+            self.metronome = MetronomeWorker(self.bpm, click_bytes, self.rate)
+            self.metronome.start()
 
             from audio_analysis.fft_processor import FFTProcessor
             from audio_analysis.note_detector import NoteDetector
@@ -113,20 +192,22 @@ class LiveAudioWorker(QThread):
             
             duration_map = {"Onaltılık": 0.5, "Sekizlik": 1, "Dörtlük": 2, "İkilik": 4, "Birlik": 8}
             expected_timeline = []
-            for snote in self.score_data:
+            expected_timeline_note_indices = []
+            for idx, snote in enumerate(self.score_data):
                 blocks = duration_map.get(snote['duration_type'], 2)
-                for _ in range(blocks):
+                num_blocks = max(1, int(blocks))
+                for _ in range(num_blocks):
                     expected_timeline.append(snote['pitch'])
+                    expected_timeline_note_indices.append(idx)
             
             block_dur = 60 / (self.bpm * 2) # 0.25sn
-            beat_dur = 60 / self.bpm # 0.5sn
             
-            self.status.emit("🎤 Mikrofon ve Metronom hazır. çalmaya başladığınızda analiz başlayacak...")
-            
-            started = False
-            start_time = 0
+            start_time = time.time()
             current_block = -1
-            current_beat = -1
+
+            # Live performance notes collection
+            live_played_notes = []
+            current_live_note = None
 
             while self.is_running:
                 data = stream.read(self.chunk_size, exception_on_overflow=False)
@@ -136,24 +217,42 @@ class LiveAudioWorker(QThread):
                 db_level = analyzer.get_db(analyzer.rms(audio_data))
                 detected_pitch = analyzer.process_chunk(audio_data, 0, db_threshold=-40)
                 
-                if not started:
-                    if db_level > -40: 
-                        started = True
-                        import time
-                        start_time = time.time()
-                        self.status.emit("🚀 Analiz başladı!")
-                    else:
-                        continue
-                
-                import time
                 elapsed = time.time() - start_time
                 
-                # Metronom Sesi (Her Beat'te bir çal)
-                beat_idx = int(elapsed / beat_dur)
-                if beat_idx > current_beat:
-                    current_beat = beat_idx
-                    stream.write(click_bytes) # Metronom sesini çal
-                
+                # Real-time note tracking
+                if db_level > -40 and detected_pitch: # If a note is heard above threshold
+                    if current_live_note is None:
+                        current_live_note = {
+                            "pitch": detected_pitch,
+                            "start_time": elapsed,
+                            "last_seen_time": elapsed
+                        }
+                    elif current_live_note["pitch"] == detected_pitch:
+                        current_live_note["last_seen_time"] = elapsed
+                    else:
+                        dur = current_live_note["last_seen_time"] - current_live_note["start_time"]
+                        if dur >= 0.05:
+                            live_played_notes.append({
+                                "pitch": current_live_note["pitch"],
+                                "start_time": current_live_note["start_time"],
+                                "duration_seconds": max(0.1, dur)
+                            })
+                        current_live_note = {
+                            "pitch": detected_pitch,
+                            "start_time": elapsed,
+                            "last_seen_time": elapsed
+                        }
+                else: # Silence
+                    if current_live_note is not None:
+                        dur = current_live_note["last_seen_time"] - current_live_note["start_time"]
+                        if dur >= 0.05:
+                            live_played_notes.append({
+                                "pitch": current_live_note["pitch"],
+                                "start_time": current_live_note["start_time"],
+                                "duration_seconds": max(0.1, dur)
+                            })
+                        current_live_note = None
+
                 # Hangi bloktayız?
                 block_idx = int(elapsed / block_dur)
                 
@@ -161,21 +260,90 @@ class LiveAudioWorker(QThread):
                     current_block = block_idx
                     if current_block < len(expected_timeline):
                         exp = expected_timeline[current_block]
+                        note_idx = expected_timeline_note_indices[current_block]
                         played = detected_pitch if detected_pitch else "Sessizlik"
                         is_correct = (played == exp)
-                        self.note_detected.emit(exp, played, is_correct, current_block + 1)
+                        self.note_detected.emit(exp, played, is_correct, current_block + 1, note_idx)
                     else:
                         self.status.emit("🏁 Score bitti.")
                         break
             
+            # Save any remaining note
+            if current_live_note is not None:
+                dur = elapsed - current_live_note["start_time"]
+                live_played_notes.append({
+                    "pitch": current_live_note["pitch"],
+                    "start_time": current_live_note["start_time"],
+                    "duration_seconds": max(0.1, dur)
+                })
+
+            if self.metronome:
+                self.metronome.is_running = False
+                
             stream.stop_stream()
             stream.close()
             p.terminate()
-            self.finished.emit([])
+            self.finished.emit(live_played_notes)
 
         except Exception as e:
-            self.status.emit(f"Mikrofon/Metronom Hatası: {e}")
+            self.status.emit(f"Mikrofon Hatası: {e}")
+            if self.metronome:
+                self.metronome.is_running = False
             p.terminate()
+
+class MusicImageLabel(QLabel):
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.current_note_rect = None # (x, y, w, h)
+        self.zoom_factor = 1.0
+
+    def set_current_note_rect(self, x, y, w, h, zoom_factor):
+        if x is not None:
+            self.current_note_rect = (x, y, w, h)
+        else:
+            self.current_note_rect = None
+        self.zoom_factor = zoom_factor
+        self.update()
+
+    def clear_current_note(self):
+        self.current_note_rect = None
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.current_note_rect is not None and self.pixmap() is not None:
+            painter = QPainter(self)
+            
+            # Sleek, vibrant modern blue color for cursor (neon/glow blue)
+            pen = QPen(QColor(0, 150, 255, 230), 4)
+            painter.setPen(pen)
+            
+            # Semi-transparent blue fill
+            painter.setBrush(QColor(0, 150, 255, 50))
+            
+            x, y, w, h = self.current_note_rect
+            
+            scaled_x = int(x * self.zoom_factor)
+            scaled_y = int(y * self.zoom_factor)
+            scaled_w = int(w * self.zoom_factor)
+            scaled_h = int(h * self.zoom_factor)
+            
+            # Center alignment offset
+            pixmap_rect = self.pixmap().rect()
+            label_rect = self.rect()
+            
+            offset_x = (label_rect.width() - pixmap_rect.width()) // 2
+            offset_y = (label_rect.height() - pixmap_rect.height()) // 2
+            
+            offset_x = max(0, offset_x)
+            offset_y = max(0, offset_y)
+            
+            scaled_x += offset_x
+            scaled_y += offset_y
+            
+            # Draw beautiful rounded rectangle around the note
+            painter.drawRoundedRect(QRect(scaled_x, scaled_y, scaled_w, scaled_h), 6, 6)
+            painter.end()
 
 class MuzipApp(QMainWindow):
     def __init__(self):
@@ -220,7 +388,7 @@ class MuzipApp(QMainWindow):
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setStyleSheet("background-color: #111; border: 2px dashed #555;")
         
-        self.lbl_image_display = QLabel("Henüz bir nota yüklenmedi.")
+        self.lbl_image_display = MusicImageLabel("Henüz bir nota yüklenmedi.")
         self.lbl_image_display.setAlignment(Qt.AlignCenter)
         self.scroll_area.setWidget(self.lbl_image_display)
         left_layout.addWidget(self.scroll_area, stretch=1)
@@ -258,6 +426,31 @@ class MuzipApp(QMainWindow):
         lbl_title_audio = QLabel("🎤 Performans")
         lbl_title_audio.setFont(QFont("Arial", 14, QFont.Bold))
         right_layout.addWidget(lbl_title_audio)
+
+        # Metronom Ayarı (BPM)
+        bpm_layout = QHBoxLayout()
+        lbl_bpm = QLabel("Metronom Tempo (BPM):")
+        lbl_bpm.setStyleSheet("font-weight: bold; color: #fff;")
+        
+        self.spin_bpm = QSpinBox()
+        self.spin_bpm.setRange(40, 240)
+        self.spin_bpm.setValue(120)
+        self.spin_bpm.setFixedWidth(80)
+        self.spin_bpm.setStyleSheet("""
+            QSpinBox {
+                background-color: #1e1e1e;
+                color: #00ff00;
+                font-size: 14px;
+                font-weight: bold;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 4px;
+            }
+        """)
+        bpm_layout.addWidget(lbl_bpm)
+        bpm_layout.addWidget(self.spin_bpm)
+        bpm_layout.addStretch()
+        right_layout.addLayout(bpm_layout)
 
         self.lbl_audio_status = QLabel("Ses dosyası bekleniyor...")
         right_layout.addWidget(self.lbl_audio_status)
@@ -338,6 +531,11 @@ class MuzipApp(QMainWindow):
             )
             self.lbl_image_display.setPixmap(scaled_pixmap)
             self.lbl_image_display.adjustSize()
+            
+            # Güncel zoom oranını imlece de bildir
+            if hasattr(self, 'lbl_image_display') and hasattr(self.lbl_image_display, 'zoom_factor'):
+                self.lbl_image_display.zoom_factor = self.zoom_factor
+                self.lbl_image_display.update()
 
     def start_image_analysis(self):
         self.btn_analyze_img.setEnabled(False)
@@ -372,7 +570,8 @@ class MuzipApp(QMainWindow):
             self.btn_live_audio.setStyleSheet("background-color: #7f8c8d;")
             self.log("\n>>> CANLI ANALİZ HAZIRLANIYOR...")
             
-            self.live_worker = LiveAudioWorker(self.score_data)
+            bpm_val = self.spin_bpm.value()
+            self.live_worker = LiveAudioWorker(self.score_data, bpm=bpm_val)
             self.live_worker.status.connect(self.log)
             self.live_worker.note_detected.connect(self.on_live_note)
             self.live_worker.finished.connect(self.stop_live_analysis)
@@ -380,16 +579,56 @@ class MuzipApp(QMainWindow):
         else:
             self.stop_live_analysis()
 
-    def on_live_note(self, expected, played, is_correct, block_no):
+    def on_live_note(self, expected, played, is_correct, block_no, note_idx):
         icon = "✅" if is_correct else "❌"
         msg = f"{block_no}. Blok | Beklenen: {expected:<5} | Duyulan: {played:<5} {icon}"
         self.log(msg)
 
-    def stop_live_analysis(self):
+        # Gezinen imleci ve kaydırmayı güncelle
+        if 0 <= note_idx < len(self.score_data):
+            note = self.score_data[note_idx]
+            x = note.get('x')
+            y = note.get('y')
+            w = note.get('w')
+            h = note.get('h')
+            if x is not None and y is not None:
+                self.lbl_image_display.set_current_note_rect(x, y, w, h, self.zoom_factor)
+                self.scroll_to_note(x, y, w, h)
+
+    def scroll_to_note(self, x, y, w, h):
+        if x is None or y is None:
+            return
+        scaled_x = int(x * self.zoom_factor)
+        scaled_y = int(y * self.zoom_factor)
+        scaled_w = int(w * self.zoom_factor)
+        scaled_h = int(h * self.zoom_factor)
+        
+        viewport_width = self.scroll_area.viewport().width()
+        viewport_height = self.scroll_area.viewport().height()
+        
+        target_h_scroll = scaled_x + (scaled_w // 2) - (viewport_width // 2)
+        target_v_scroll = scaled_y + (scaled_h // 2) - (viewport_height // 2)
+        
+        self.scroll_area.horizontalScrollBar().setValue(target_h_scroll)
+        self.scroll_area.verticalScrollBar().setValue(target_v_scroll)
+
+    def stop_live_analysis(self, live_notes=None):
         if hasattr(self, 'live_worker'):
             self.live_worker.is_running = False
+            if hasattr(self.live_worker, 'metronome') and self.live_worker.metronome:
+                self.live_worker.metronome.is_running = False
+        
+        # Canlı çalınan notaları kaydet
+        if isinstance(live_notes, list) and len(live_notes) > 0:
+            self.audio_data = live_notes
+            self.btn_compare.setEnabled(True)
+            self.log(f"✅ Canlı performans kaydı tamamlandı. {len(live_notes)} nota algılandı.")
+            self.log("💡 Muzip değerlendirme için hazır! Yeşil 'PUANLA VE DEĞERLENDİR' butonuna basın.")
+        
         self.btn_live_audio.setText("🔴 CANLI PERFORMANS BAŞLAT")
         self.btn_live_audio.setStyleSheet("background-color: #c0392b;")
+        if hasattr(self, 'lbl_image_display') and hasattr(self.lbl_image_display, 'clear_current_note'):
+            self.lbl_image_display.clear_current_note()
         self.log(">>> CANLI ANALİZ DURDURULDU.")
 
     def load_audio(self):
@@ -437,11 +676,12 @@ class MuzipApp(QMainWindow):
             self.log("💡 Muzip değerlendirme için hazır! Yeşil butona basın.")
 
     def run_comparison(self):
-        self.log("\n================ SONUÇLAR (120 BPM) ================")
+        bpm_val = self.spin_bpm.value()
+        self.log(f"\n================ SONUÇLAR ({bpm_val} BPM) ================")
         try:
             evaluator = PerformanceEvaluator()
-            # 120 BPM ile zaman bloğu bazlı karşılaştırma
-            result = evaluator.compare_with_bpm(self.score_data, self.audio_data, bpm=120)
+            # Seçilen BPM ile zaman bloğu bazlı karşılaştırma
+            result = evaluator.compare_with_bpm(self.score_data, self.audio_data, bpm=bpm_val)
 
             accuracy = result.get('accuracy', 0)
             self.log(f"METRONOM BAŞARI ORANI: %{accuracy:.2f}")

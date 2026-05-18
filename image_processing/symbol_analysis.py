@@ -161,39 +161,36 @@ def merge_note_heads_simple(heads, spacing):
 def is_valid_note_head(bbox, spacing):
     x, y, w, h = bbox
 
-    # Kuyrukları elemek için minimum boyut sınırları artırıldı.
-    # Nota başı genişliği genellikle spacing değerine yakındır.
-    # Genişlik (0.8 - 2.0 * spacing)
-    # Yükseklik (0.8 - 1.6 * spacing)
-    
-    if not (0.8 * spacing < w < 2.0 * spacing):
+    # Nota başından küçük kutuları elemeyi garanti altına almak için alt sınır sıkılaştırıldı
+    if not (0.85 * spacing < w < 2.0 * spacing):
         return False
-    if not (0.8 * spacing < h < 1.6 * spacing):
+    if not (0.82 * spacing < h < 1.6 * spacing):
         return False
 
     aspect_ratio = w / h
-    # Nota başları yatay elipstir, çok dikey nesneleri eliyoruz.
-    if not (0.9 < aspect_ratio < 2.0): 
+    # Nota başı yatay elipstir, aspect ratio kontrolü
+    if not (0.90 < aspect_ratio < 1.9): 
         return False
 
     return True
 def detect_stem_direction(img, bbox, spacing):
     x, y, w, h = bbox
 
-    stem_x = x + w // 2
+    # Saplar yukarı gidiyorsa nota başının sağındadır (x + w - 2)
+    # Saplar aşağı gidiyorsa nota başının solundadır (x + 2)
+    up_strip = img[max(0, y - int(3.5 * spacing)):y, max(0, x + w - 3):min(img.shape[1], x + w)]
+    down_strip = img[y+h:min(img.shape[0], y+h + int(3.5 * spacing)), max(0, x):min(img.shape[1], x + 3)]
 
-    upper_roi = img[max(0, y - int(3 * spacing)):y, stem_x-1:stem_x+1]
-    lower_roi = img[y+h:y+h + int(3 * spacing), stem_x-1:stem_x+1]
+    up_pixels = cv2.countNonZero(up_strip) if up_strip.size > 0 else 0
+    down_pixels = cv2.countNonZero(down_strip) if down_strip.size > 0 else 0
 
-    upper_black = cv2.countNonZero(255 - upper_roi)
-    lower_black = cv2.countNonZero(255 - lower_roi)
-
-    if upper_black > lower_black:
+    if up_pixels > down_pixels and up_pixels > 5:
         return "up"
-    elif lower_black > upper_black:
+    elif down_pixels > up_pixels and down_pixels > 5:
         return "down"
-    else:
-        return None
+    
+    return None
+
 def find_stem_end(img, start_x, start_y, direction, max_len):
     h, w = img.shape[:2]
 
@@ -206,49 +203,37 @@ def find_stem_end(img, start_x, start_y, direction, max_len):
             break
 
         pixel = img[y, start_x]
-        if pixel > 200:
-            return y
+        # Sap çizgisi beyazdır, siyah arka plana (0) ulaştığımızda sapın sonuna gelmişizdir.
+        if pixel < 50:
+            return y - step
 
     return y
 
 def has_flag_from_stem(img, bbox, spacing):
     x, y, w, h = bbox
 
-    direction = detect_stem_direction(img, bbox, spacing)
-    if direction is None:
+    # Bu nota kağıdında her nota bayrağı/kuyruğu alt kısımda (nota başının altında) yer alır.
+    # Nota başının dikey olarak altından 1.0 * spacing ile 3.5 * spacing arası bayrak bölgesidir.
+    y_start = y + h + int(1.0 * spacing)
+    y_end = y + h + int(3.5 * spacing)
+    
+    if y_start >= img.shape[0]:
         return False
+    y_end = min(img.shape[0], y_end)
 
-    stem_x = x + w // 2
-    stem_start_y = y if direction == "up" else y + h
+    # Sapın sol tarafında (sol sapın sağ kısmı) veya sağ tarafında (sağ sapın sağ kısmı) bayrak yoğunluğunu tara
+    sol_stem_x = x + 2
+    sol_roi = img[y_start:y_end, max(0, sol_stem_x + 2):min(img.shape[1], sol_stem_x + int(1.8 * spacing))]
 
-    stem_end_y = find_stem_end(
-        img,
-        stem_x,
-        stem_start_y,
-        direction,
-        max_len=int(4 * spacing)
-    )
+    sag_stem_x = x + w - 2
+    sag_roi = img[y_start:y_end, max(0, sag_stem_x + 2):min(img.shape[1], sag_stem_x + int(1.8 * spacing))]
 
-    check_y = stem_end_y + (-2 if direction == "up" else 2)
+    sol_pixels = cv2.countNonZero(sol_roi) if sol_roi.size > 0 else 0
+    sag_pixels = cv2.countNonZero(sag_roi) if sag_roi.size > 0 else 0
 
-    side_rois = [
-        (stem_x + 1, stem_x + int(1.5 * spacing)),   
-        (stem_x - int(1.5 * spacing), stem_x - 1)    
-    ]
-
-    for x1, x2 in side_rois:
-        roi = img[
-            max(0, check_y - 2): check_y + 2,
-            max(0, x1): max(0, x2)
-        ]
-
-        if roi.size == 0:
-            continue
-
-        black_ratio = cv2.countNonZero(255 - roi) / roi.size
-
-        if black_ratio > 0.15:
-            return True
+    # Alt kısımda sapın yanında belirgin bir piksel yoğunluğu (kuyruk) varsa sekizliktir
+    if sol_pixels > 4 or sag_pixels > 4:
+        return True
 
     return False
 
@@ -283,9 +268,10 @@ def is_note_head_filled(img, bbox):
     return fill_ratio > 0.55
 
 def determine_duration(img, bbox, spacing):
-    not_filled = is_note_head_filled(img, bbox)
+    # Bu fonksiyon içi mantıkta is_note_head_filled içi boş (half note) olduğunda True döner
+    is_empty_head = is_note_head_filled(img, bbox)
 
-    if not_filled:
+    if is_empty_head:
         return "Half"      
 
     if has_flag_from_stem(img, bbox, spacing):
@@ -340,12 +326,12 @@ def detect_note_heads(staff_removed_img, staff_coords):
         area = stats[i, cv2.CC_STAT_AREA]
         solidity = area / (w * h)
         
-        if solidity < 0.2: 
+        if solidity < 0.22: 
             continue
             
-        # Nota başları alanı dizek aralığı karesine göre (0.5 - 3.5 katı)
-        # Min alan 0.3'ten 0.5'e çekilerek kuyruk kalıntıları elendi.
-        if not (0.5 * (spacing**2) < area < 3.5 * (spacing**2)):
+        # Nota başları alanı dizek aralığı karesine göre (0.52 - 3.5 katı)
+        # Min alan 0.52'ye çekilerek bayrak/kuyruk parçalarının bağımsız nota olarak algılanması tamamen önlendi.
+        if not (0.52 * (spacing**2) < area < 3.5 * (spacing**2)):
             continue
 
         mask = np.zeros(staff_removed_img.shape, dtype=np.uint8)

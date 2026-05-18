@@ -147,23 +147,21 @@ def run_image_processing_module(file_path):
             note['duration_type'] = map_duration_type(gemini_duration)
             note['accidental'] = map_accidental_type(gemini_accidental)
             
-            # Mavi Kutu Çizme (Eğer koordinat verisi varsa)
-            accidental_box = gemini_map[order].get('accidental_box_2d')
-            if accidental_box and len(accidental_box) == 4:
-                h_img, w_img = temp_img.shape[:2]
-                ymin, xmin, ymax, xmax = accidental_box
-                
-                # Normalize koordinatları (0-1000) piksele çevir
-                # Normalize koordinatları (0-1000) piksele çevir
-                # Ölçeklendirme ve belirginleştirme: Biraz padding ekle
-                padding = 3
-                px_ymin = max(0, int(ymin * h_img / 1000) - padding)
-                px_xmin = max(0, int(xmin * w_img / 1000) - padding)
-                px_ymax = min(h_img, int(ymax * h_img / 1000) + padding)
-                px_xmax = min(w_img, int(xmax * w_img / 1000) + padding)
-                
-                # Mavi kutu çiz (# arızasının üzerine) - Kalınlığı artırıldı (3)
-                cv2.rectangle(temp_img, (px_xmin, px_ymin), (px_xmax, px_ymax), (255, 0, 0), 3)
+            # Mavi Kutu Çizme (Kullanıcı isteğiyle kaldırıldı)
+            # accidental_box = gemini_map[order].get('accidental_box_2d')
+            # if accidental_box and len(accidental_box) == 4:
+            #     h_img, w_img = temp_img.shape[:2]
+            #     ymin, xmin, ymax, xmax = accidental_box
+            #     
+            #     # Normalize koordinatları (0-1000) piksele çevir
+            #     padding = 3
+            #     px_ymin = max(0, int(ymin * h_img / 1000) - padding)
+            #     px_xmin = max(0, int(xmin * w_img / 1000) - padding)
+            #     px_ymax = min(h_img, int(ymax * h_img / 1000) + padding)
+            #     px_xmax = min(w_img, int(xmax * w_img / 1000) + padding)
+            #     
+            #     # Mavi kutu çiz (# arızasının üzerine) - Kalınlığı artırıldı (3)
+            #     cv2.rectangle(temp_img, (px_xmin, px_ymin), (px_xmax, px_ymax), (255, 0, 0), 3)
         else:
             note['accidental'] = "" # Varsayılan boş
 
@@ -179,7 +177,11 @@ def run_image_processing_module(file_path):
         final_score_data.append({
             "pitch": final_pitch,
             "duration_type": note['duration_type'], # 'Dörtlük' vb.
-            "order": order
+            "order": order,
+            "x": note['x'],
+            "y": note['y'],
+            "w": note['w'],
+            "h": note['h']
         })
 
     # Gemini sonuçlarıyla (mavi kutularla) güncellenmiş resmi tekrar kaydet
